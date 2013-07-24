@@ -45,10 +45,10 @@
 #include <termio.h>
 #include <string.h>
 
-#define CHAR_DELAY_uS  1000                            // delay between character transmission
+#define DEFAULT_SERIAL_PORT "/dev/ttyUSB0"
+#define DEFAULT_BAUD 9600
+#define DEFAULT_CHAR_DELAY_uS 1000                     // delay between character transmission
 #define SELECT_TIMEOUT 1500000    	   	       	       // select cmd timeout 1.5s (number in uS)
-// #define BAUD B115200
-// #define SERIAL_PORT "/dev/ttyUSB0"
 
 int open_serial_port(char *, int);
 void print_help (void);
@@ -60,6 +60,7 @@ int main(int argc, char *argv[]) {
   fd_set readfds;
   struct timeval to;
   int select_status;
+  int char_delay = DEFAULT_CHAR_DELAY_uS;
 
   struct termios old_tio, new_tio;
 
@@ -67,23 +68,24 @@ int main(int argc, char *argv[]) {
   const char baud_str[]="-b";
   const char help_str[]="-h";
   const char buffer_str[]="-n";
+  const char file_str[] = "-f";
+  const char delay_str[] = "-d";
 
-  unsigned int baudrate = 9600;
-  // unsigned int baudrate = 19200;
-  // unsigned int baudtemp;
-  char serialport[80] = "/dev/ttyUSB0";
+  unsigned int baudrate = DEFAULT_BAUD;
+  char serialport[80] = DEFAULT_SERIAL_PORT;
+
+  FILE *sf = NULL;
+  char sendfile[80] = "";
 
   int i;
   int status;
 
   tcgetattr(STDIN_FILENO,&old_tio);
   new_tio=old_tio;
-  new_tio.c_lflag &= ~ECHO;
-  new_tio.c_lflag &= ~ICANON;
-//  tcsetattr(STDIN_FILENO,TCSANOW,&new_tio);
+  new_tio.c_lflag &= ~(ECHO|ICANON);
 
 
-  //  printf("SerialT Startup\n");
+  // Argument Parsing
   for (i=1;i<argc;i++) {
     if (!strcmp(argv[i],help_str)) {
       print_help();
@@ -94,44 +96,37 @@ int main(int argc, char *argv[]) {
       i++;
     }
     else if (!strcmp(argv[i],baud_str)) {
- //     printf("Found Baud String, %s\n",argv[i+1]);
       baudrate = atoi(argv[i+1]);
-//      printf("Baudtemp=%d\n",baudtemp);
-//      if ((baudtemp) && !(baudtemp%1200)) {
- //       baudrate=baudtemp;
- //     printf("%d\n",baudrate);
- //     }
- //     else {
- //       printf("Error: Invalid baudrate %s\n",argv[i+1]);
- //       exit(0);
- //     }
       i++;
     }
     else if (!strcmp(argv[i],buffer_str)) {
-//      setvbuf(stdin, NULL, _IONBF, 0);
-//      setvbuf(stdout, NULL, _IONBF, 0);
-//      setvbuf(stderr, NULL, _IONBF, 0);
-      // adjust STDIN to be non-blocking, no echo
-//      new_tio.c_lflag &= ~ECHO;
       new_tio.c_lflag |= ICANON;
-      //  new_tio.c_lflag &=(~ICANON);
-//      tcsetattr(STDIN_FILENO,TCSANOW,&new_tio);
     }
+    else if (!strcmp(argv[i],file_str)) {
+      sprintf(sendfile,"%s",argv[i+1]);
+      sf = fopen(sendfile,"r");
+      i++;
+    }
+    else if (!strcmp(argv[i],delay_str)) {
+      char_delay = atoi(argv[i+1]);
+      i++;
+      if (!((char_delay>0)&&(char_delay<1000000))) {
+        printf("Error: Invalid delay value - %s\n",delay_str);
+        exit(1);
+      }
+    }
+
     else {
       printf("Error: bad option %s\n",argv[i]);
       printf("\"SerialT -h\" for list of options\n");
       exit(0);
     }
   }
-  //  printf("%s %d\n",serialport, baudrate);
-  //  printf("Baudrate = %d\n",baudrate);
   if ((tty_handle = open_serial_port(serialport,baudrate)) == -1) {
     printf ("Error -> Could not open %s\n",serialport);
     exit(1);
   }
-
   tcsetattr(STDIN_FILENO,TCSANOW,&new_tio);
-
 
   while (1) {
     // Select Command Preparation
@@ -141,28 +136,37 @@ int main(int argc, char *argv[]) {
     to.tv_sec = SELECT_TIMEOUT/1000000;      // timeout seconds  = 1s (total timeout = 1.5uS)
     to.tv_usec = SELECT_TIMEOUT%1000000;     // timeout usec = .5s
 
+    if (sf) {
+      if (fread(&ch,1,1,sf)) {
+        status=write(tty_handle,&ch,1);     // send the character out the tty port
+        if (status!=1) {
+          printf("Error: Failed to write %c\n",ch);
+        }
+        tcdrain(tty_handle);                // wait for the character to go
+        usleep(char_delay);              // delay between characters, give goofy some time to process chars
+      }
+    }
+
     // wait here until one of the selectors becomes active
     select_status=select(tty_handle+1,&readfds,(fd_set *)0,(fd_set *)0,&to);
     if (select_status==-1);                  // Select Error
     else if (select_status==0);              // Select Timeout
     else {                                   // Descriptor is ready for one of the members
-      // Check to see which descriptor is active
+       // Check to see which descriptor is active
       // STDIN Handler
       if (FD_ISSET(STDIN_FILENO,&readfds)) {
         if ((n=read(STDIN_FILENO,&ch,1))!=0) {
-	  //	  printf("pulled %c chars from STDIN\n",ch);
           status=write(tty_handle,&ch,1);     // send the character out the tty port
-	  if (status!=1) {
-	    printf("Error: Failed to write %c\n",ch);
-	  }
-          tcdrain(tty_handle);                // wait for the character to go
-          usleep(CHAR_DELAY_uS);              // delay between characters, give goofy some time to process chars
+          if (status!=1) {
+        	  printf("Error: Failed to write %c\n",ch);
+        	}
+          tcdrain(tty_handle);             // wait for the character to go
+          usleep(char_delay);              // delay between characters, give goofy some time to process chars
         }
       }
       // Serial Port Handler
       if (FD_ISSET(tty_handle,&readfds)) {
         if ((n=read(tty_handle,&ch,1))!=0) {  // grab the data from the tty
-	  //	  printf("%d\n",n);
           if ((ch>=' ')&&(ch<='~')){
             printf("%c",ch);
           }
@@ -177,6 +181,7 @@ int main(int argc, char *argv[]) {
       }
     }
   }
+  // Restore Terminal Parameters
   tcsetattr(STDIN_FILENO,TCSANOW,&old_tio);
 }
 
@@ -188,115 +193,107 @@ int open_serial_port(char *port_string, int baud) {
     printf("Could Not Open %s\n",port_string);
     return (-1);
   }
-  //  printf("opened the port");
-
   tcgetattr(fd,&options);
-  //   memcpy(&tio, &_termios, sizeof(struct termios));
   options.c_iflag = IGNPAR;
   options.c_oflag = 0;
-  //  options.c_cflag = B115200 | CLOCAL | CREAD | CS8;
-//   options.c_cflag = B9600 | CLOCAL | CREAD | CS8;
   options.c_lflag = 0;
-
+  options.c_cflag = CLOCAL | CREAD | CS8;
   switch (baud) {
     case 50:
-      options.c_cflag = B50 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B50;
       break;
     case 75:
-      options.c_cflag = B75 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B75;
       break;
     case 110:
-      options.c_cflag = B110 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B110;
       break;
     case 134:
-      options.c_cflag = B134 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B134;
       break;
     case 150:
-      options.c_cflag = B150 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B150;
       break;
     case 200:
-      options.c_cflag = B200 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B200;
       break;
     case 300:
-      options.c_cflag = B300 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B300;
       break;
     case 600:
-      options.c_cflag = B600 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B600;
       break;
     case 1200:
-      options.c_cflag = B1200 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B1200;
       break;
     case 1800:
-      options.c_cflag = B1800 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B1800;
       break;
     case 2400:
-      options.c_cflag = B2400 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B2400;
       break;
     case 4800:
-      options.c_cflag = B4800 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B4800;
       break;
     case 9600:
-      options.c_cflag = B9600 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B9600;
       break;
     case 19200:
-      options.c_cflag = B19200 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B19200;
       break;
     case 38400:
-      options.c_cflag = B38400 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B38400;
       break;
     case 57600:
-      options.c_cflag = B57600 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B57600;
       break;
     case 115200:
-      options.c_cflag = B115200 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B115200;
       break;
     case 230400:
-      options.c_cflag = B230400 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B230400;
       break;
     case 460800:
-      options.c_cflag = B460800 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B460800;
       break;
     case 500000:
-      options.c_cflag = B500000 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B500000;
       break;
     case 576000:
-      options.c_cflag = B576000 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B576000;
       break;
     case 921600:
-      options.c_cflag = B921600 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B921600;
       break;
     case 1000000:
-      options.c_cflag = B1000000 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B1000000;
       break;
     case 1152000:
-      options.c_cflag = B1152000 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B1152000;
       break;
     case 1500000:
-      options.c_cflag = B1500000 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B1500000;
       break;
     case 2000000:
-      options.c_cflag = B2000000 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B2000000;
       break;
     case 2500000:
-      options.c_cflag = B2500000 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B2500000;
       break;
     case 3000000:
-      options.c_cflag = B3000000 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B3000000;
       break;
     case 3500000:
-      options.c_cflag = B3500000 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B3500000;
       break;
     case 4000000:
-      options.c_cflag = B4000000 | CLOCAL | CREAD | CS8;
+      options.c_cflag |= B4000000;
       break;
     default:
       printf("Error: Invalid Baud Rate, %d\n",baud);
       exit(1);
   }
   tcflush(fd, TCIFLUSH);
-
-//  cfsetispeed(&options,baud);
-//  cfsetospeed(&options,baud);
   options.c_cflag &= ~PARENB;
   options.c_cflag &= ~CSTOPB;
   options.c_cflag &= ~CSIZE;
