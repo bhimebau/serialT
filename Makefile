@@ -1,20 +1,20 @@
 NAME            = serialT
-OBJECTS         = main.o 
-ASFLAGS         = 
-CFLAGS          = -O2 -Wall -g 
+OBJECTS         = main.o
+ASFLAGS         =
+CFLAGS          = -pg -O2 -Wall -g
 
 #Switch the compiler (for the internal make rules)
-CC              = gcc 
+CC              = gcc
 AS              = gcc
 
-.PHONY: all FORCE clean download download-jtag 
+.PHONY: all FORCE clean download download-jtag
 
-all: ${NAME} 
+all: ${NAME}
 
 ${NAME}: ${OBJECTS}
 	${CC} -o $@ ${OBJECTS}
 
 clean:
-	rm -f ${NAME} $(OBJECTS) 
+	rm -f ${NAME} $(OBJECTS)
 
 
