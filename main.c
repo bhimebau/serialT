@@ -44,6 +44,7 @@
 #include <fcntl.h>
 #include <termio.h>
 #include <string.h>
+#include <signal.h>
 
 #define DEFAULT_SERIAL_PORT "/dev/ttyUSB0"
 #define DEFAULT_BAUD 9600
@@ -52,6 +53,9 @@
 
 int open_serial_port(char *, int);
 void print_help (void);
+void CtrlC_Handler(int);
+
+struct termios old_tio, new_tio;
 
 int main(int argc, char *argv[]) {
   int tty_handle;
@@ -62,7 +66,7 @@ int main(int argc, char *argv[]) {
   int select_status;
   int char_delay = DEFAULT_CHAR_DELAY_uS;
 
-  struct termios old_tio, new_tio;
+  //   struct termios old_tio, new_tio;
 
   const char port_str[]="-p";
   const char baud_str[]="-b";
@@ -79,6 +83,8 @@ int main(int argc, char *argv[]) {
 
   int i;
   int status;
+
+  signal(SIGINT, CtrlC_Handler);
 
   tcgetattr(STDIN_FILENO,&old_tio);
   new_tio=old_tio;
@@ -315,4 +321,11 @@ void print_help (void) {
   printf("-b Baudrate of the serial port: default=9600\n");
   printf("-n disable buffered I/O\n");
 }
+
+void CtrlC_Handler(int sig) {
+  signal(sig, SIG_IGN);
+  tcsetattr(STDIN_FILENO,TCSANOW,&old_tio);
+  exit(0);
+}
+
 
